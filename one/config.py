@@ -78,4 +78,3 @@ DEFAULT_UTM_PARAMS = {
     'utm_campaign': 'students_winter_2025'  # Updated from old 'bts-slap' campaign
 }
 
-print("Config updated with fresh Gemini student promo data - ready to run 😈")
