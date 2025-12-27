@@ -1,7 +1,8 @@
-"""SheerID 学生验证主程序"""
+"""SheerID 学生验证主程序 - Updated Dec 27 2025 for Gemini student promo overuse fix (no proxies)"""
 import re
 import random
 import logging
+import time
 import httpx
 from typing import Dict, Optional, Tuple
 
@@ -24,7 +25,12 @@ class SheerIDVerifier:
     def __init__(self, verification_id: str):
         self.verification_id = verification_id
         self.device_fingerprint = self._generate_device_fingerprint()
-        self.http_client = httpx.Client(timeout=30.0)
+        self.user_agent = self._get_random_user_agent()  # Rotate UA
+
+        self.http_client = httpx.Client(
+            timeout=30.0,
+            headers={"User-Agent": self.user_agent}
+        )
 
     def __del__(self):
         if hasattr(self, "http_client"):
@@ -36,8 +42,17 @@ class SheerIDVerifier:
         return ''.join(random.choice(chars) for _ in range(32))
 
     @staticmethod
+    def _get_random_user_agent() -> str:
+        agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0",
+        ]
+        return random.choice(agents)
+
+    @staticmethod
     def normalize_url(url: str) -> str:
-        """规范化 URL（保留原样）"""
         return url
 
     @staticmethod
@@ -53,6 +68,7 @@ class SheerIDVerifier:
         """发送 SheerID API 请求"""
         headers = {
             "Content-Type": "application/json",
+            "User-Agent": self.user_agent,
         }
 
         try:
@@ -92,22 +108,28 @@ class SheerIDVerifier:
         try:
             current_step = "initial"
 
+            # Random human-like delay
+            time.sleep(random.uniform(4, 12))
+
             if not first_name or not last_name:
                 name = NameGenerator.generate()
                 first_name = name["first_name"]
                 last_name = name["last_name"]
 
-            school_id = school_id or config.DEFAULT_SCHOOL_ID
+            # Random school from config (main fix for overused org)
+            if not school_id:
+                school_ids = list(config.SCHOOLS.keys())
+                school_id = random.choice(school_ids)
             school = config.SCHOOLS[school_id]
 
             if not email:
-                email = generate_psu_email(first_name, last_name)
+                email = generate_psu_email(first_name, last_name)  # TODO: update to match school domain if possible
             if not birth_date:
                 birth_date = generate_birth_date()
 
             logger.info(f"学生信息: {first_name} {last_name}")
             logger.info(f"邮箱: {email}")
-            logger.info(f"学校: {school['name']}")
+            logger.info(f"学校: {school['name']} (ID: {school_id})")
             logger.info(f"生日: {birth_date}")
             logger.info(f"验证 ID: {self.verification_id}")
 
@@ -116,6 +138,8 @@ class SheerIDVerifier:
             img_data = generate_image(first_name, last_name, school_id)
             file_size = len(img_data)
             logger.info(f"✅ PNG 大小: {file_size / 1024:.2f}KB")
+
+            time.sleep(random.uniform(5, 15))
 
             # 提交学生信息
             logger.info("步骤 2/4: 提交学生信息...")
@@ -127,14 +151,14 @@ class SheerIDVerifier:
                 "phoneNumber": "",
                 "organization": {
                     "id": int(school_id),
-                    "idExtended": school["idExtended"],
+                    "idExtended": school.get("idExtended", school_id),
                     "name": school["name"],
                 },
                 "deviceFingerprintHash": self.device_fingerprint,
                 "locale": "en-US",
                 "metadata": {
                     "marketConsentValue": False,
-                    "refererUrl": f"{config.SHEERID_BASE_URL}/verify/{config.PROGRAM_ID}/?verificationId={self.verification_id}",
+                    "refererUrl": f"https://one.google.com/ai-student?verificationId={self.verification_id}",  # Fresher Gemini referer
                     "verificationId": self.verification_id,
                     "flags": '{"collect-info-step-email-first":"default","doc-upload-considerations":"default","doc-upload-may24":"default","doc-upload-redesign-use-legacy-message-keys":false,"docUpload-assertion-checklist":"default","font-size":"default","include-cvec-field-france-student":"not-labeled-optional"}',
                     "submissionOptIn": "By submitting the personal information above, I acknowledge that my personal information is being collected under the privacy policy of the business from which I am seeking a discount",
@@ -148,15 +172,19 @@ class SheerIDVerifier:
             )
 
             if step2_status != 200:
+                logger.error(f"Step 2 full response: {step2_data}")
                 raise Exception(f"步骤 2 失败 (状态码 {step2_status}): {step2_data}")
             if step2_data.get("currentStep") == "error":
                 error_msg = ", ".join(step2_data.get("errorIds", ["Unknown error"]))
+                logger.error(f"Step 2 error details: {step2_data}")
                 raise Exception(f"步骤 2 错误: {error_msg}")
 
             logger.info(f"✅ 步骤 2 完成: {step2_data.get('currentStep')}")
             current_step = step2_data.get("currentStep", current_step)
 
-            # 跳过 SSO（如需要）
+            time.sleep(random.uniform(6, 18))
+
+            # 跳过 SSO
             if current_step in ["sso", "collectStudentPersonalInfo"]:
                 logger.info("步骤 3/4: 跳过 SSO 验证...")
                 step3_data, _ = self._sheerid_request(
@@ -166,7 +194,9 @@ class SheerIDVerifier:
                 logger.info(f"✅ 步骤 3 完成: {step3_data.get('currentStep')}")
                 current_step = step3_data.get("currentStep", current_step)
 
-            # 上传文档并完成提交
+            time.sleep(random.uniform(5, 12))
+
+            # 上传文档
             logger.info("步骤 4/4: 请求并上传文档...")
             step4_body = {
                 "files": [
@@ -179,6 +209,7 @@ class SheerIDVerifier:
                 step4_body,
             )
             if not step4_data.get("documents"):
+                logger.error(f"Doc prep failed: {step4_data}")
                 raise Exception("未能获取上传 URL")
 
             upload_url = step4_data["documents"][0]["uploadUrl"]
@@ -194,7 +225,6 @@ class SheerIDVerifier:
             logger.info(f"✅ 文档提交完成: {step6_data.get('currentStep')}")
             final_status = step6_data
 
-            # 不做状态轮询，直接返回等待审核
             return {
                 "success": True,
                 "pending": True,
@@ -214,7 +244,7 @@ def main():
     import sys
 
     print("=" * 60)
-    print("SheerID 学生身份验证工具 (Python版)")
+    print("SheerID 学生身份验证工具 (Python版) - Overuse fix 2025")
     print("=" * 60)
     print()
 
